@@ -1,0 +1,28 @@
+{
+  "CSV_FILE_BASE": "Dtools_Opportunity_Hours",
+  "HOURS_FILE": "Dtools_All_Hours",
+  "OPP_FILE": "Dtools_Opps_List",
+  "DETAILS_PATH": "OpportunityDetails",
+  "QUOTES_PATH": "QuoteDetails",
+  "CHANGE_PATH": "ChangeDetails",
+  "CSV_OPTIONS": {
+    "Job ID": "id",
+    "Client Name": "clientName",
+    "Job Name": "name",
+    "Job Stage": "stage",
+    "Job Priority": "priority",
+    "Job Price": "price",
+    "Labor Type": "laborType",
+    "Quoted Minutes": "quoteMinutes",
+    "Worked Minutes": "jobMinutes",
+    "Service Type": "serviceType",
+    "Service Quantity": "serviceNum",
+    "Service Price": "servicePrice"
+  },
+  "SERVICE_CATEGORY": "Warranties & Service Plans",
+  "API_DELAY": 600,
+  "API_LOG_FILE": "Dtools_API_Calls.txt",
+  "API_URL_BASE": "https://dtcloudapi.d-tools.cloud/api/v1",
+  "API_PATH_TIME": "/TimeEntries/GetTimeEntries?page=1&pageSize=6000",
+  "API_PATH_OPP": "/Opportunities/GetOpportunities?stages=New%20Sales%20Opportunity&stages=Opportunity%20Won&stages=Qualifying%20%26%20Consulting&stages=Quote%20Development%20%28See%20Quote%20States%29&stages=Negotiating%2C%20Reviews&stages=On%20Hold&sort=Price%20DESC&page=1&pageSize=3000"
+}

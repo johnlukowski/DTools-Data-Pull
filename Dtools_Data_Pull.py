@@ -1,10 +1,10 @@
 """
 File: Dtools_Data_Pull.py
-Associated Files: AUTHENTICATION, LICENSE
+Associated Files: AUTHENTICATION, LICENSE, config.json
 Required Packages: requests 
 License: Apache-2.0
 Date Created: 18Feb2025
-Last Modified: 27Mar2025 by John Lukowski
+Last Modified: 31Mar2025 by John Lukowski
 
 Purpose: Using a gui to select API data fields, perform API calls to
 the Dtools cloud and export the results in a structured csv file.
@@ -21,7 +21,7 @@ where these are the username/password and api key for dtools cloud
 """
 
 ### Authorship Information
-__version__ = '1.0'
+__version__ = '1.1'
 __author__ = 'John Lukowski, Excel Communications Worldwide'
 __email__ = 'jlukowski@excelcom.net'
 __copyright__ = 'Copyright 2025 John Lukowski'
@@ -52,6 +52,7 @@ from tkinter import ttk
 from pathlib import Path
 from base64 import b64encode, b64decode
 from os import makedirs
+from copy import copy, deepcopy
 from threading import Thread
 from datetime import datetime
 
@@ -59,39 +60,35 @@ from datetime import datetime
 import requests # pip install requests
 
 ### Static Variables
+CONFIG_FILE = 'config.json'
 ERR_LOG_FILE = 'Dtools.log'
-CSV_FILE_BASE = 'Dtools_Opportunity_Hours'
-HOURS_FILE = 'Dtools_All_Hours'
-OPP_FILE = 'Dtools_Opps_List'
-DETAILS_PATH = 'OpportunityDetails'
-QUOTES_PATH = 'QuoteDetails'
-CHANGE_PATH = 'ChangeDetails'
-CSV_OPTIONS = {
-    'Job ID':'id',
-    'Client Name':'clientName',
-    'Job Name':'name',
-    'Job Stage':'stage',
-    'Job Priority':'priority',
-    'Job Price':'price',
-    'Labor Type':'laborType',
-    'Quoted Minutes':'quoteMinutes',
-    'Worked Minutes':'jobMinutes'
-}
-API_LOG_FILE = 'Dtools_API_Calls.txt'
-API_URL_BASE = 'https://dtcloudapi.d-tools.cloud/api/v1'
-API_PATH_TIME = '/TimeEntries/GetTimeEntries?page=1&pageSize=6000'
-API_PATH_OPP = '/Opportunities/GetOpportunities' +\
-    '?stages=New%20Sales%20Opportunity' +\
-    '&stages=Opportunity%20Won' +\
-    '&stages=Qualifying%20%26%20Consulting' +\
-    '&stages=Quote%20Development%20%28See%20Quote%20States%29' +\
-    '&stages=Negotiating%2C%20Reviews' +\
-    '&stages=On%20Hold&sort=Price%20DESC' +\
-    '&page=1' +\
-    '&pageSize=3000'
 
 # Start an error logger for important steps and errors
 ERR_LOG = logging.getLogger(__name__)
+logging.basicConfig(
+        filename=ERR_LOG_FILE,
+        format='%(asctime)s-%(levelname)s-%(message)s',
+        level=logging.INFO,
+        filemode='w',
+        force=True
+    )
+ERR_LOG.info('Logging Started')
+
+def readConfig(fileName):
+    """
+    readConfig is a function meant to read config variables
+    from a json formatted file
+
+    :param fileName: string path/name of the config file
+    """
+    try:
+        with open(fileName, 'r') as file:
+            data = json.load(file)
+    except Exception as e:
+        ERR_LOG.warning(f'File read error: {fileName}: {str(e)}')
+        safeExit(1)
+    for key, value in data.items():
+        globals()[key] = value
 
 def writeFile(fileName, data):
     """
@@ -100,10 +97,12 @@ def writeFile(fileName, data):
 
     :param fileName: string path/name of the file
     :param data: string data to write to file
-    :return: None
     """
-    with open(fileName, 'w') as file:
-        json.dump(data, file)
+    try:
+        with open(fileName, 'w') as file:
+            json.dump(data, file)
+    except Exception as e:
+        ERR_LOG.warning(f'File write error: {fileName}: {str(e)}')
 
 def readFile(fileName):
     """
@@ -120,10 +119,18 @@ def readFile(fileName):
         ERR_LOG.warning(f'File not found: {fileName}')
         return None
     except Exception as e:
-        ERR_LOG.warning(f'File error: {fileName}: {str(e)}')
+        ERR_LOG.warning(f'File read error: {fileName}: {str(e)}')
         return None
 
 def safeExit(errCode, *args, **kwargs):
+    """
+    safeExit is a function meant to end the program
+    and show the error log if not exited with errCode 0
+    Will handle closing the tkinter window if open
+
+    :param errCode: flag for error, 0 no error or 1 error
+    :param kwargs: optional 'api' and 'gui' objects
+    """
     if 'api' in kwargs:
         kwargs['api'].setError(errCode)
         ERR_LOG.info(kwargs['api'].strStats())
@@ -167,8 +174,6 @@ class DtoolsAPI:
         """
         getHeader is a function meant to take in sensitive information
         from a file and decode it to be used in DtoolsAPI object
-
-        :return: None
         """
         try:
             with open('AUTHENTICATION', 'r') as file:
@@ -176,7 +181,11 @@ class DtoolsAPI:
         except FileNotFoundError:
             ERR_LOG.critical('Invalid or missing AUTHENTICATION file.')
             safeExit(1)
-        auth = json.loads(b64decode(temp.encode()).decode())
+        try:
+            auth = json.loads(b64decode(temp.encode()).decode())
+        except Exception as e:
+            ERR_LOG.warning(f'Invalid AUTHENTICATION file: {str(e)}')
+            safeExit(1)
 
         self.apiHeader = {
             'X-API-Key': auth['key'],
@@ -211,7 +220,6 @@ class DtoolsAPI:
         :param username: username to store
         :param password: password to store
         :param apiKey: api key to store
-        :return: None
         """
         auth = {'username':username, 'password':password, 'key':apiKey}
         temp = b64encode(json.dumps(auth).encode()).decode()
@@ -228,7 +236,7 @@ class DtoolsAPI:
         :return: returns the api response data or None
         """
         if self.getTotal() < 10000:
-            time.sleep(.75)
+            time.sleep(API_DELAY/1000)
             self.apiPulls += 1
             try:
                 url = API_URL_BASE + urlTarget
@@ -290,6 +298,7 @@ def updateTime(allMins, projId, task, quoteMins, taskMins):
     :param allMins: dictionary to add the time entries too
     :param projId: key to use for the time entry
     :param task: labor type to use for the time entry
+    :param quoteMins: time in minutes to add to the time entry
     :param taskMins: time in minutes to add to the time entry
     """
     if projId in allMins:
@@ -317,14 +326,16 @@ def compileData(api, window, checkBoxes, csvFileName, csvHeaders):
     checkbox states (pullTimeEntries from file, pull job list from file,
     pull job details from file, pull quote details from file)
     :param csvFileName: name of file to store final data
-    :return: returns 0 if the function completed properly, 1 if there
-    was an issue encountered involving pulling data from files or api
     """
     allMins = {}
+    allService = {}
     oppList = None
+    csvWriteQueue = []
+
+    timeHeaders = ['Labor Type', 'Quoted Minutes', 'Worked Minutes']
+    serviceHeaders = ['Service Type', 'Service Quantity', 'Service Price']
 
     # Only pull time entry data if a relevant filter is selected
-    timeHeaders = ['Labor Type', 'Quoted Minutes', 'Worked Minutes']
     if any(header in csvHeaders for header in timeHeaders):
         timeEntries = None
         # Attempt to pull time entries from saved file
@@ -373,7 +384,7 @@ def compileData(api, window, checkBoxes, csvFileName, csvHeaders):
             window.nametowidget('progressBar')['value'] = int(100*i/maxItems)
             window.after(0, lambda:
                 window.title(
-                    f'D-Tools API Pull (Calls used today: {api.getTotal()}'
+                    f'D-Tools API Pull (Calls used today: {api.getTotal()})'
                 )
             )
         oppId = oppList[i]['id']
@@ -404,7 +415,7 @@ def compileData(api, window, checkBoxes, csvFileName, csvHeaders):
         csvData = [
             oppDetails[CSV_OPTIONS[i]]
             for i in csvHeaders
-            if i not in timeHeaders
+            if i not in timeHeaders+serviceHeaders
         ]
 
         # Get quoted time if requested in headers
@@ -414,7 +425,7 @@ def compileData(api, window, checkBoxes, csvFileName, csvHeaders):
 
             # This is a project with potentially change orders
             if oppStage == 'Opportunity Won':
-                # Accumulate all job hours    
+                # Accumulate all job hours
                 for laborType in oppDetails['laborTypes']:
                     task = laborType['name']
                     taskMins = int(laborType['totalTimeInSeconds']/60)
@@ -481,34 +492,166 @@ def compileData(api, window, checkBoxes, csvFileName, csvHeaders):
                         quoteLabor.update({task:taskMins})
                     if quoteMins > oppMinutes:
                         oppMinutes = quoteMins
-                        oppLabor = quoteLabor
+                        oppLabor = deepcopy(quoteLabor)
 
                 for laborType in oppLabor:
                     allMins.update({oppId:{
                         laborType:[oppLabor[laborType],0],
                         'TOTALS':[oppLabor[laborType],0]
                     }})
+
+        # Get service plans if requested in headers
+        if any(header in csvHeaders for header in serviceHeaders):
+            if oppId not in allService:
+                allService.update({oppId:{'TOTALS':[0,0]}})
+
+            # This is a project with potentially change orders
+            if oppStage == 'Opportunity Won' and 'items' in oppDetails:
+                # Accumulate all service items
+                for item in oppDetails['items']:
+                    if item['category'] == SERVICE_CATEGORY:
+                        name = item['name']
+                        quant = item['quantity']
+                        price = 0
+                        if item['msrp'] is not None:
+                            price += item['msrp'] * quant
+                        if item['laborItems'] is not None:
+                            price += quant * sum(i['price']
+                                for i in item['laborItems']
+                            )
+
+                        updateTime(allService, oppId, name, quant, price)
+
+                # Accumulate all change order details
+                for changeId in oppDetails['changeOrderIds']:
+                    changeDetails = readFile(CHANGE_PATH+f'/{changeId}.txt')
+                    fileName = CHANGE_PATH+f'/{changeId}.txt'
+                    apiPath = f'/ChangeOrders/GetChangeOrder?id={changeId}'
+
+                    # Attempt to pull change order data from file
+                    if checkBoxes[4]:
+                        changeDetails = readFile(fileName)
+
+                    if changeDetails is None:
+                        changeDetails = api.pullData(apiPath)
+
+                        if changeDetails is not None:
+                            writeFile(fileName, changeDetails)
+                        else:
+                            ERR_LOG.warning(f'Cant pull co {changeId}')
+                            continue
+
+                    # Only add hours from accepted change orders
+                    if changeDetails['state'] == 'Accepted':
+                        for item in changeDetails['items']:
+                            if item['category'] == SERVICE_CATEGORY:
+                                name = item['name']
+                                quant = item['quantity']
+                                price = 0
+                                if item['msrp'] is not None:
+                                    price += item['msrp'] * quant
+                                if item['laborItems'] is not None:
+                                    price += quant * sum(i['price']
+                                        for i in item['laborItems']
+                                    )
+
+                                updateTime(allService, oppId, name, quant, price)
+
+            # This is an opportunity with quotes, find the biggest
+            else:
+                oppPrice = 0
+                oppService = {}
+
+                for quoteId in oppDetails['quoteIds']:
+                    quoteDetails = None
+                    fileName = QUOTES_PATH+f'/{quoteId}.txt'
+                    apiPath = f'/Quotes/GetQuote?id={quoteId}'
+
+                    # Attempt to pull quote from file
+                    # Attempt to pull quote from file
+                    if checkBoxes[3]:
+                        quoteDetails = readFile(fileName)
+
+                    if quoteDetails is None:
+                        quoteDetails = api.pullData(apiPath)
+
+                        if quoteDetails is not None:
+                            writeFile(fileName, quoteDetails)
+                        else:
+                            ERR_LOG.warning(f'Cant pull quote {quoteId}')
+                            continue
+                    
+                    # Comparing to find biggest quote
+                    quotePrice = 0
+                    quoteService = {}
+                    for item in quoteDetails['items']:
+                        if item['category'] == SERVICE_CATEGORY:
+                            name = item['name']
+                            quant = item['quantity']
+                            price = 0
+                            if item['msrp'] is not None:
+                                price += item['msrp'] * quant
+                            if item['laborItems'] is not None:
+                                price += quant * sum(i['price']
+                                    for i in item['laborItems']
+                                )
+                            quotePrice += price
+                            if name in quoteService:
+                                quoteService[name][0] += quant
+                                quoteService[name][1] += price
+                            else:
+                                quoteService.update({name:[quant,price]})
+                    if quotePrice > oppPrice:
+                        oppPrice = quotePrice
+                        oppService = deepcopy(quoteService)
+
+                for item in oppService:
+                    quant = oppService[item][0]
+                    price = oppService[item][1]
+                    updateTime(allService, oppId, item, quant, price)
         
-        # If tracking labor, write to csv file
+        # If tracking labor or service, write to csv file
         if 'Labor Type' in csvHeaders:
             for laborType in allMins[oppId]:
                 if laborType != 'TOTALS':
-                    temp = csvData + [laborType]
+                    temp = copy(csvData) + [laborType]
                     if 'Quoted Minutes' in csvHeaders:
                         temp += [allMins[oppId][laborType][0]]
                     if 'Worked Minutes' in csvHeaders:
                         temp += [allMins[oppId][laborType][1]]
-                    with open(csvFileName, 'a', newline='') as file:
-                        writer = csv.writer(file)
-                        writer.writerow(temp)
+                    if 'Service Quantity' in csvHeaders:
+                        temp += [allService[oppId]['TOTALS'][0]]
+                    if 'Service Price' in csvHeaders:
+                        temp += [allService[oppId]['TOTALS'][1]]
+                    csvWriteQueue += [temp]
+        elif 'Service Type' in csvHeaders:
+            for serviceType in allService[oppId]:
+                if serviceType != 'TOTALS':
+                    temp = copy(csvData)
+                    if 'Quoted Minutes' in csvHeaders:
+                        temp += [allMins[oppId]['TOTALS'][0]]
+                    if 'Worked Minutes' in csvHeaders:
+                        temp += [allMins[oppId]['TOTALS'][1]]
+                    temp += [serviceType]
+                    if 'Service Quantity' in csvHeaders:
+                        temp += [allService[oppId][serviceType][0]]
+                    if 'Service Price' in csvHeaders:
+                        temp += [allService[oppId][serviceType][1]]
+                    csvWriteQueue += [temp]
         else:
             if 'Quoted Minutes' in csvHeaders:
-                    csvData += [allMins[oppId]['TOTALS'][0]]
+                csvData += [allMins[oppId]['TOTALS'][0]]
             if 'Worked Minutes' in csvHeaders:
                 csvData += [allMins[oppId]['TOTALS'][1]]
-            with open(csvFileName, 'a', newline='') as file:
-                writer = csv.writer(file)
-                writer.writerow(csvData)
+            if 'Service Quantity' in csvHeaders:
+                csvData += [allService[oppId]['TOTALS'][0]]
+            if 'Service Price' in csvHeaders:
+                csvData += [allService[oppId]['TOTALS'][1]]
+            csvWriteQueue += [csvData]
+
+    with open(csvFileName, 'a', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerows(csvWriteQueue)
 
     if 'win' in sys.platform:
         os.startfile(csvFileName)
@@ -523,7 +666,6 @@ def compileDataClicked(api, window, checkBoxes):
     :param checkBoxes: 4 element list or tuple of ttk.Checkbutton
     objects from gui (pullTimeEntries from file, pull job list from
     file, pull job details from file, pull quote details from file)
-    :return: None
     """
     keys = list(CSV_OPTIONS.keys())
     selected = window.nametowidget('filterLst').curselection()
@@ -554,7 +696,6 @@ def filterClicked(window):
     the user multiselect csv data fields to output
 
     :param window: tkinter TK() window meant to handle all gui elements
-    :return: None
     """
     if window.nametowidget('filterLst').winfo_ismapped() > 0:
         window.nametowidget('filterLst').place_forget()
@@ -563,13 +704,24 @@ def filterClicked(window):
             anchor='n', width=150, height=250)
         window.nametowidget('filterLst').lift()
 
+def filterSelection(event, box):
+    """
+    filterSelection is the gui hook for a listbox click event
+    used to only allow selecting one Type field per run
+
+    :param event: tkinter builtin event object
+    :param box: the listbox object triggering the event
+    """
+    selected = box.get(box.nearest(event.y))
+    if 'Service Type' in selected:
+        box.selection_clear(list(CSV_OPTIONS.keys()).index('Labor Type'))
+    elif 'Labor Type' in selected:
+        box.selection_clear(list(CSV_OPTIONS.keys()).index('Service Type'))
+
 def windowClosed():
     """
     windowClosed is the gui hook for if the gui is manually closed or
     terminated, will terminate program and all threads
-
-    :param window: tkinter TK() window meant to handle all gui elements
-    :return: None
     """
     ERR_LOG.error('Window force closed')
     safeExit(1)
@@ -578,17 +730,8 @@ def main():
     """
     main is the entrance point for the program and creates/runs the gui
     file and records api connection statistics
-
-    :return: None
     """
-    logging.basicConfig(
-        filename=ERR_LOG_FILE,
-        format='%(asctime)s-%(levelname)s-%(message)s',
-        level=logging.INFO,
-        filemode='w',
-        force=True
-    )
-    ERR_LOG.info('Logging Started')
+    readConfig(CONFIG_FILE)
 
     makedirs(DETAILS_PATH, exist_ok=True)
     makedirs(QUOTES_PATH, exist_ok=True)
@@ -622,7 +765,8 @@ def main():
     progressLabel.place(relx=.5, y=290, anchor='n', height=30)
     filterOptions = tk.Listbox(name='filterLst', selectmode='multiple')
     filterOptions.insert(tk.END, *CSV_OPTIONS)
-    filterOptions.select_set(0,tk.END)
+    filterOptions.select_set(0,list(CSV_OPTIONS.keys()).index('Labor Type')-1)
+    filterOptions.bind('<Button-1>', lambda event: filterSelection(event, filterOptions))
     filterButton = ttk.Button(name='filterBtn',
         text='CSV Fields',
         command=lambda: filterClicked(window))
