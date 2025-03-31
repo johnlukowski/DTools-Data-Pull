@@ -12,9 +12,10 @@
     "Job Stage": "stage",
     "Job Priority": "priority",
     "Job Price": "price",
+    "Created Date": "createdDate",
     "Labor Type": "laborType",
-    "Quoted Minutes": "quoteMinutes",
-    "Worked Minutes": "jobMinutes",
+    "Quoted Hours": "quoteHours",
+    "Worked Hours": "jobHours",
     "Service Type": "serviceType",
     "Service Quantity": "serviceNum",
     "Service Price": "servicePrice"

@@ -21,7 +21,7 @@ where these are the username/password and api key for dtools cloud
 """
 
 ### Authorship Information
-__version__ = '1.1'
+__version__ = '1.3'
 __author__ = 'John Lukowski, Excel Communications Worldwide'
 __email__ = 'jlukowski@excelcom.net'
 __copyright__ = 'Copyright 2025 John Lukowski'
@@ -47,6 +47,7 @@ import time
 import csv
 import os
 import logging
+import re
 import tkinter as tk
 from tkinter import ttk
 from pathlib import Path
@@ -291,28 +292,28 @@ class DtoolsAPI:
         return f'API Calls Used: {self.apiPulls}, ' +\
             f'Total Calls Used Today: {self.apiDetails['totalCalls']}'
 
-def updateTime(allMins, projId, task, quoteMins, taskMins):
+def updateTime(allTime, projId, task, quoteTime, taskTime):
     """
     updateTime is a function meant to add time entries to a dictionary
 
-    :param allMins: dictionary to add the time entries too
+    :param allTime: dictionary to add the time entries too
     :param projId: key to use for the time entry
     :param task: labor type to use for the time entry
-    :param quoteMins: time in minutes to add to the time entry
-    :param taskMins: time in minutes to add to the time entry
+    :param quoteTime: time to add to the time entry
+    :param taskTime: time to add to the time entry
     """
-    if projId in allMins:
-        if task in allMins[projId]:
-            allMins[projId][task][0] += quoteMins
-            allMins[projId][task][1] += taskMins
+    if projId in allTime:
+        if task in allTime[projId]:
+            allTime[projId][task][0] += quoteTime
+            allTime[projId][task][1] += taskTime
         else:
-            allMins[projId].update({task:[quoteMins,taskMins]})
-        allMins[projId]['TOTALS'][0] += quoteMins
-        allMins[projId]['TOTALS'][1] += taskMins
+            allTime[projId].update({task:[quoteTime,taskTime]})
+        allTime[projId]['TOTALS'][0] += quoteTime
+        allTime[projId]['TOTALS'][1] += taskTime
     else:
-        allMins.update({projId:{
-            task:[quoteMins,taskMins],
-            'TOTALS':[quoteMins,taskMins]
+        allTime.update({projId:{
+            task:[quoteTime,taskTime],
+            'TOTALS':[quoteTime,taskTime]
         }})
 
 def compileData(api, window, checkBoxes, csvFileName, csvHeaders):
@@ -327,12 +328,12 @@ def compileData(api, window, checkBoxes, csvFileName, csvHeaders):
     pull job details from file, pull quote details from file)
     :param csvFileName: name of file to store final data
     """
-    allMins = {}
+    allTime = {}
     allService = {}
     oppList = None
     csvWriteQueue = []
 
-    timeHeaders = ['Labor Type', 'Quoted Minutes', 'Worked Minutes']
+    timeHeaders = ['Labor Type', 'Quoted Hours', 'Worked Hours']
     serviceHeaders = ['Service Type', 'Service Quantity', 'Service Price']
 
     # Only pull time entry data if a relevant filter is selected
@@ -352,13 +353,13 @@ def compileData(api, window, checkBoxes, csvFileName, csvHeaders):
                 ERR_LOG.error("Unable to retrieve hours data")
                 safeExit(1, gui=window, api=api)
 
-        # Store all time data into a dictionary allMins
+        # Store all time data into a dictionary allTime
         for i in range(len(timeEntries)):
             projId = timeEntries[i]['projectId']
             task = timeEntries[i]['laborType']
-            taskMins = timeEntries[i]['hoursWorkedInMinutes']
+            taskTime = timeEntries[i]['hoursWorkedInMinutes']/60
 
-            updateTime(allMins, projId, task, 0, taskMins)
+            updateTime(allTime, projId, task, 0, taskTime)
     
     # Load opportunity list, attempt from file
     if checkBoxes[1]:
@@ -412,25 +413,28 @@ def compileData(api, window, checkBoxes, csvFileName, csvHeaders):
                 continue
 
         # Add default filtered data to csv writer list
+        match = r'(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}:\d{2}'
         csvData = [
-            oppDetails[CSV_OPTIONS[i]]
-            for i in csvHeaders
-            if i not in timeHeaders+serviceHeaders
+            re.sub(match, r'\1', oppDetails[CSV_OPTIONS[header]])
+            if header == 'Created Date'
+            else oppDetails[CSV_OPTIONS[header]]
+            for header in csvHeaders
+            if header not in timeHeaders + serviceHeaders
         ]
 
         # Get quoted time if requested in headers
         if any(header in csvHeaders for header in timeHeaders):
-            if oppId not in allMins:
-                allMins.update({oppId:{'TOTALS':[0,0]}})
+            if oppId not in allTime:
+                allTime.update({oppId:{'TOTALS':[0,0]}})
 
             # This is a project with potentially change orders
             if oppStage == 'Opportunity Won':
                 # Accumulate all job hours
                 for laborType in oppDetails['laborTypes']:
                     task = laborType['name']
-                    taskMins = int(laborType['totalTimeInSeconds']/60)
+                    taskTime = laborType['totalTimeInSeconds']/3600
 
-                    updateTime(allMins, oppId, task, taskMins, 0)
+                    updateTime(allTime, oppId, task, taskTime, 0)
 
                 # Accumulate all change order details
                 for changeId in oppDetails['changeOrderIds']:
@@ -455,9 +459,9 @@ def compileData(api, window, checkBoxes, csvFileName, csvHeaders):
                     if changeDetails['state'] == 'Accepted':
                         for laborType in changeDetails['laborTypes']:
                             task = laborType['name']
-                            taskMins = int(laborType['totalTimeInSeconds']/60)
+                            taskTime = laborType['totalTimeInSeconds']/3600
 
-                            updateTime(allMins, oppId, task, taskMins, 0)
+                            updateTime(allTime, oppId, task, taskTime, 0)
 
             # This is an opportunity with quotes, find the biggest
             else:
@@ -483,19 +487,19 @@ def compileData(api, window, checkBoxes, csvFileName, csvHeaders):
                             continue
                     
                     # Comparing to find biggest quote
-                    quoteMins = 0
+                    quoteTime = 0
                     quoteLabor = {}
                     for laborType in quoteDetails['laborTypes']:
                         task = laborType['name']
-                        taskMins = int(laborType['totalTimeInSeconds']/60)
-                        quoteMins += taskMins
-                        quoteLabor.update({task:taskMins})
-                    if quoteMins > oppMinutes:
-                        oppMinutes = quoteMins
+                        taskTime = laborType['totalTimeInSeconds']/3600
+                        quoteTime += taskTime
+                        quoteLabor.update({task:taskTime})
+                    if quoteTime > oppMinutes:
+                        oppMinutes = quoteTime
                         oppLabor = deepcopy(quoteLabor)
 
                 for laborType in oppLabor:
-                    allMins.update({oppId:{
+                    allTime.update({oppId:{
                         laborType:[oppLabor[laborType],0],
                         'TOTALS':[oppLabor[laborType],0]
                     }})
@@ -611,27 +615,27 @@ def compileData(api, window, checkBoxes, csvFileName, csvHeaders):
                     updateTime(allService, oppId, item, quant, price)
         
         # If tracking labor or service, write to csv file
-        if 'Labor Type' in csvHeaders:
-            for laborType in allMins[oppId]:
+        if 'Labor Type' in csvHeaders and len(allTime[oppId]) > 1:
+            for laborType in allTime[oppId]:
                 if laborType != 'TOTALS':
                     temp = copy(csvData) + [laborType]
-                    if 'Quoted Minutes' in csvHeaders:
-                        temp += [allMins[oppId][laborType][0]]
-                    if 'Worked Minutes' in csvHeaders:
-                        temp += [allMins[oppId][laborType][1]]
+                    if 'Quoted Hours' in csvHeaders:
+                        temp += [allTime[oppId][laborType][0]]
+                    if 'Worked Hours' in csvHeaders:
+                        temp += [allTime[oppId][laborType][1]]
                     if 'Service Quantity' in csvHeaders:
                         temp += [allService[oppId]['TOTALS'][0]]
                     if 'Service Price' in csvHeaders:
                         temp += [allService[oppId]['TOTALS'][1]]
                     csvWriteQueue += [temp]
-        elif 'Service Type' in csvHeaders:
+        elif 'Service Type' in csvHeaders and len(allService[oppId]) > 1:
             for serviceType in allService[oppId]:
                 if serviceType != 'TOTALS':
                     temp = copy(csvData)
-                    if 'Quoted Minutes' in csvHeaders:
-                        temp += [allMins[oppId]['TOTALS'][0]]
-                    if 'Worked Minutes' in csvHeaders:
-                        temp += [allMins[oppId]['TOTALS'][1]]
+                    if 'Quoted Hours' in csvHeaders:
+                        temp += [allTime[oppId]['TOTALS'][0]]
+                    if 'Worked Hours' in csvHeaders:
+                        temp += [allTime[oppId]['TOTALS'][1]]
                     temp += [serviceType]
                     if 'Service Quantity' in csvHeaders:
                         temp += [allService[oppId][serviceType][0]]
@@ -639,10 +643,14 @@ def compileData(api, window, checkBoxes, csvFileName, csvHeaders):
                         temp += [allService[oppId][serviceType][1]]
                     csvWriteQueue += [temp]
         else:
-            if 'Quoted Minutes' in csvHeaders:
-                csvData += [allMins[oppId]['TOTALS'][0]]
-            if 'Worked Minutes' in csvHeaders:
-                csvData += [allMins[oppId]['TOTALS'][1]]
+            if 'Labor Type' in csvHeaders:
+                csvData += ['None']
+            if 'Quoted Hours' in csvHeaders:
+                csvData += [allTime[oppId]['TOTALS'][0]]
+            if 'Worked Hours' in csvHeaders:
+                csvData += [allTime[oppId]['TOTALS'][1]]
+            if 'Service Type' in csvHeaders:
+                csvData += ['None']
             if 'Service Quantity' in csvHeaders:
                 csvData += [allService[oppId]['TOTALS'][0]]
             if 'Service Price' in csvHeaders:
